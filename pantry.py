@@ -3,6 +3,7 @@ import argparse
 import csv
 import json
 import math
+import os
 import pathlib
 import sqlite3
 import sys
@@ -168,6 +169,24 @@ def history(db, item_name=None, limit=50, output_format='text'):
     print('STOCK HISTORY // newest first')
     for row in records: print(f"#{row['id']} {row['item']}: {row['delta']:g} ({row['reason']}) {row['happened_at']}")
 
+def backup_database(db, output_path):
+    if os.path.lexists(output_path): raise ValueError(f'backup destination exists: {output_path}')
+    fd = os.open(output_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600); os.close(fd)
+    destination = None
+    try:
+        destination = sqlite3.connect(output_path)
+        db.backup(destination)
+        if destination.execute('PRAGMA integrity_check').fetchone()[0] != 'ok': raise sqlite3.DatabaseError('backup integrity check failed')
+        destination.commit()
+    except Exception:
+        if destination is not None: destination.close()
+        try: os.unlink(output_path)
+        except OSError: pass
+        raise
+    finally:
+        if destination is not None: destination.close()
+    print(f'Backup written: {output_path}.')
+
 def move(db, name, delta, reason):
     with db:
         item = db.execute('SELECT id FROM pantry_items WHERE name = ?', (name,)).fetchone()
@@ -190,6 +209,7 @@ def main():
     recipe_add = sub.add_parser('add-recipe'); recipe_add.add_argument('name'); recipe_add.add_argument('ingredients', nargs='+')
     item_add = sub.add_parser('add-item'); item_add.add_argument('name'); item_add.add_argument('unit', choices=['g', 'ml', 'each']); item_add.add_argument('--minimum', type=float, default=0); item_add.add_argument('--initial', type=float, default=0)
     hist = sub.add_parser('history'); hist.add_argument('--item'); hist.add_argument('--limit', type=int, default=50); hist.add_argument('--format', choices=['text', 'json'], default='text')
+    backup = sub.add_parser('backup'); backup.add_argument('output')
     try:
         args = parser.parse_args(); db = connect(args.db)
         if args.command == 'seed':
@@ -208,6 +228,7 @@ def main():
             elif args.command == 'add-recipe': add_recipe(db, args.name, args.ingredients)
             elif args.command == 'add-item': add_item(db, args.name, args.unit, args.minimum, args.initial)
             elif args.command == 'history': history(db, args.item, args.limit, args.format)
+            elif args.command == 'backup': backup_database(db, args.output)
             else: move(db, args.name, args.delta, args.reason); print('Stock movement recorded.')
     except (sqlite3.Error, OSError, ValueError) as error:
         if 'db' in locals(): db.rollback()

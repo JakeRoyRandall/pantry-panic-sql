@@ -6,7 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT))
-from pantry import add_item, add_recipe, connect, cook_plan, ensure_recipes, history, needs, plan, report, set_reserve, shopping
+from pantry import add_item, add_recipe, backup_database, connect, cook_plan, ensure_recipes, history, needs, plan, report, set_reserve, shopping
 
 class PantrySQLTest(unittest.TestCase):
     def setUp(self):
@@ -92,6 +92,34 @@ class PantrySQLTest(unittest.TestCase):
         self.assertEqual({record['reason'] for record in records}, {'opening', 'used'})
         with self.assertRaises(ValueError): history(self.db, 'No item', 1)
         with self.assertRaises(ValueError): history(self.db, None, 0)
+
+    def test_backup_restores_state_and_refuses_existing_destination(self):
+        import tempfile, os
+        source_fd, source = tempfile.mkstemp(); os.close(source_fd)
+        dest_fd, dest = tempfile.mkstemp(); os.close(dest_fd)
+        try:
+            source_db = connect(source); source_db.executescript((ROOT / 'seed.sql').read_text()); source_db.commit(); ensure_recipes(source_db); set_reserve(source_db, 'Pasta', 100); plan(source_db, 'Emergency tomato pasta', 2); source_db.commit()
+            os.unlink(dest); backup_database(source_db, dest)
+            restored = connect(dest)
+            self.assertEqual(restored.execute("SELECT quantity FROM current_stock WHERE name = 'Pasta'").fetchone()[0], 900)
+            self.assertEqual(restored.execute("SELECT reserve_quantity FROM pantry_items WHERE name = 'Pasta'").fetchone()[0], 100)
+            self.assertEqual(restored.execute('SELECT COUNT(*) FROM saved_meal_plan').fetchone()[0], 1)
+            with self.assertRaises(ValueError): backup_database(source_db, dest)
+            self.assertTrue(os.path.getsize(dest) > 0)
+            restored.close(); source_db.close()
+        finally:
+            for path in (source, dest):
+                if os.path.exists(path): os.unlink(path)
+
+    def test_backup_includes_wal_committed_data(self):
+        import tempfile, os
+        source_fd, source = tempfile.mkstemp(); os.close(source_fd); dest = source + '.copy'
+        try:
+            source_db = connect(source); source_db.execute('PRAGMA journal_mode=WAL'); source_db.executescript((ROOT / 'seed.sql').read_text()); source_db.commit(); source_db.execute("INSERT INTO pantry_items(name, unit, reorder_at) VALUES ('WAL spice', 'g', 1)"); source_db.commit(); backup_database(source_db, dest)
+            copied = connect(dest); self.assertEqual(copied.execute("SELECT name FROM pantry_items WHERE name = 'WAL spice'").fetchone()[0], 'WAL spice'); copied.close(); source_db.close()
+        finally:
+            for path in (source, dest, source + '-wal', source + '-shm'):
+                if os.path.exists(path): os.unlink(path)
 
     def test_constraints_reject_bad_item_and_movement(self):
         with self.assertRaises(sqlite3.IntegrityError): self.db.execute("INSERT INTO pantry_items(id, name, unit, reorder_at) VALUES (99, 'Salt', 'cups', 2)")
