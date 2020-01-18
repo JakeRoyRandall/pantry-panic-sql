@@ -22,6 +22,11 @@ def connect(path):
     db.executescript((ROOT / 'schema.sql').read_text())
     return db
 
+def connect_readonly(path):
+    db = sqlite3.connect(pathlib.Path(path).resolve().as_uri() + '?mode=ro', uri=True)
+    db.row_factory = sqlite3.Row
+    return db
+
 def seed(db):
     if db.execute('SELECT COUNT(*) FROM pantry_items').fetchone()[0]:
         raise ValueError('database is already seeded; start with a fresh --db path')
@@ -187,6 +192,22 @@ def backup_database(db, output_path):
         if destination is not None: destination.close()
     print(f'Backup written: {output_path}.')
 
+def check_database(db):
+    issues = []
+    integrity = db.execute('PRAGMA integrity_check').fetchone()[0]
+    if integrity != 'ok': issues.append(f'integrity_check: {integrity}')
+    foreign_keys = db.execute('PRAGMA foreign_key_check').fetchall()
+    issues.extend(f'foreign_key_check: table={row[0]} rowid={row[1]}' for row in foreign_keys)
+    for row in db.execute('SELECT name, quantity FROM current_stock'):
+        if not math.isfinite(row['quantity']) or row['quantity'] < 0: issues.append(f'invalid stock: {row["name"]}')
+    for row in db.execute('SELECT name FROM recipes r WHERE NOT EXISTS (SELECT 1 FROM recipe_ingredients ri WHERE ri.recipe_id = r.id)'):
+        issues.append(f'empty recipe: {row["name"]}')
+    if issues:
+        print('PANTRY CHECK // issues found')
+        for issue in issues: print(f'- {issue}')
+        raise ValueError(f'{len(issues)} health issue(s) found')
+    print('PANTRY CHECK // healthy')
+
 def move(db, name, delta, reason):
     with db:
         item = db.execute('SELECT id FROM pantry_items WHERE name = ?', (name,)).fetchone()
@@ -210,8 +231,15 @@ def main():
     item_add = sub.add_parser('add-item'); item_add.add_argument('name'); item_add.add_argument('unit', choices=['g', 'ml', 'each']); item_add.add_argument('--minimum', type=float, default=0); item_add.add_argument('--initial', type=float, default=0)
     hist = sub.add_parser('history'); hist.add_argument('--item'); hist.add_argument('--limit', type=int, default=50); hist.add_argument('--format', choices=['text', 'json'], default='text')
     backup = sub.add_parser('backup'); backup.add_argument('output')
+    sub.add_parser('check')
     try:
-        args = parser.parse_args(); db = connect(args.db)
+        args = parser.parse_args()
+        if args.command == 'check':
+            db = connect_readonly(args.db)
+            try: check_database(db)
+            finally: db.close()
+            return
+        db = connect(args.db)
         if args.command == 'seed':
             seed(db); ensure_recipes(db); print('Seeded fictional pantry items.')
         else:

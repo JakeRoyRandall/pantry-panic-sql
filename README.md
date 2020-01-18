@@ -43,3 +43,5 @@ Add pantry stock with `python3 pantry.py --db pantry.db add-item "Chili flakes" 
 Review stock movements with `python3 pantry.py --db pantry.db history --item Flour --limit 20 --format json`. Item filtering is optional; limit is1–1000 with default50. Results are newest first by ledger ID and include opening and usage entries. Default output is readable text.
 
 Create a consistent SQLite snapshot with `python3 pantry.py --db pantry.db backup pantry-backup.db`. The destination must not exist. SQLite backup includes committed WAL data and checks snapshot integrity before reporting success. Source stock, recipes, reserves, and saved plans are preserved.
+
+Run `python3 pantry.py --db pantry.db check` for read-only integrity, foreign-key, stock, and empty-recipe checks. It opens an existing database without initialization or repair, exits nonzero on issues, and never creates a missing database.

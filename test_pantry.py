@@ -6,7 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT))
-from pantry import add_item, add_recipe, backup_database, connect, cook_plan, ensure_recipes, history, needs, plan, report, set_reserve, shopping
+from pantry import add_item, add_recipe, backup_database, check_database, connect, cook_plan, ensure_recipes, history, needs, plan, report, set_reserve, shopping
 
 class PantrySQLTest(unittest.TestCase):
     def setUp(self):
@@ -120,6 +120,37 @@ class PantrySQLTest(unittest.TestCase):
         finally:
             for path in (source, dest, source + '-wal', source + '-shm'):
                 if os.path.exists(path): os.unlink(path)
+
+    def test_check_reports_healthy_and_empty_recipe(self):
+        check_database(self.db)
+        self.db.execute("INSERT INTO recipes(name) VALUES ('No ingredients')"); self.db.commit()
+        with self.assertRaises(ValueError): check_database(self.db)
+
+    def test_check_reports_corrupt_foreign_key(self):
+        import tempfile, os
+        fd, path = tempfile.mkstemp(); os.close(fd)
+        try:
+            db = connect(path); db.execute('PRAGMA foreign_keys = OFF'); db.execute("INSERT INTO stock_movements(item_id, delta, reason) VALUES (999, 1, 'opening')"); db.commit(); db.close()
+            corrupted = connect(path)
+            with self.assertRaises(ValueError): check_database(corrupted)
+            corrupted.close()
+        finally:
+            if os.path.exists(path): os.unlink(path)
+
+    def test_check_cli_is_read_only_and_missing_file_stays_missing(self):
+        import hashlib, subprocess, sys, tempfile, os
+        fd, path = tempfile.mkstemp(); os.close(fd)
+        missing = path + '.missing'
+        try:
+            db = connect(path); db.executescript((ROOT / 'seed.sql').read_text()); db.commit(); db.close()
+            before = hashlib.sha256(Path(path).read_bytes()).digest()
+            result = subprocess.run([sys.executable, str(ROOT / 'pantry.py'), '--db', path, 'check'], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0); self.assertEqual(hashlib.sha256(Path(path).read_bytes()).digest(), before)
+            missing_result = subprocess.run([sys.executable, str(ROOT / 'pantry.py'), '--db', missing, 'check'], capture_output=True, text=True)
+            self.assertNotEqual(missing_result.returncode, 0); self.assertFalse(os.path.exists(missing)); self.assertNotIn('Traceback', missing_result.stderr)
+        finally:
+            if os.path.exists(path): os.unlink(path)
+            if os.path.exists(missing): os.unlink(missing)
 
     def test_constraints_reject_bad_item_and_movement(self):
         with self.assertRaises(sqlite3.IntegrityError): self.db.execute("INSERT INTO pantry_items(id, name, unit, reorder_at) VALUES (99, 'Salt', 'cups', 2)")
