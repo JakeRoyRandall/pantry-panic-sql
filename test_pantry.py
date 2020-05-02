@@ -6,6 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT))
+from pantry import ensure_recipes, needs
 
 class PantrySQLTest(unittest.TestCase):
     def setUp(self):
@@ -14,6 +15,7 @@ class PantrySQLTest(unittest.TestCase):
         self.db.executescript((ROOT / 'schema.sql').read_text())
         self.db.executescript((ROOT / 'seed.sql').read_text())
         self.db.commit()
+        ensure_recipes(self.db)
 
     def tearDown(self): self.db.close()
 
@@ -52,9 +54,33 @@ class PantrySQLTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn('Traceback', result.stderr)
 
+    def test_recipe_needs_scales_and_reports_missing(self):
+        rows = self.db.execute("""SELECT i.name, ri.quantity_per_serving * 3 AS need,
+          MAX(0, ri.quantity_per_serving * 3 - cs.quantity) AS missing
+          FROM recipe_ingredients ri JOIN recipes r ON r.id = ri.recipe_id
+          JOIN pantry_items i ON i.id = ri.item_id JOIN current_stock cs ON cs.id = i.id
+          WHERE r.name = 'Emergency tomato pasta' ORDER BY i.name""").fetchall()
+        self.assertEqual([(r['name'], r['need'], r['missing']) for r in rows], [('Pasta', 240.0, 0.0), ('Tinned tomatoes', 3.0, 2.0)])
+        with self.assertRaises(ValueError): needs(self.db, 'Emergency tomato pasta', 0)
+        with self.assertRaises(ValueError): needs(self.db, 'Emergency tomato pasta', float('nan'))
+        with self.assertRaises(ValueError): needs(self.db, 'Emergency tomato pasta', float('inf'))
 
+    def test_recipe_without_ingredients_is_clear_error(self):
+        self.db.execute("INSERT INTO recipes(name) VALUES ('Empty bowl')")
+        with self.assertRaises(ValueError): needs(self.db, 'Empty bowl', 1)
 
+    def test_recipe_quantity_rejects_infinity(self):
+        with self.assertRaises(sqlite3.IntegrityError): self.db.execute("INSERT INTO recipe_ingredients VALUES (1, 1, 1e20)")
 
+    def test_cli_rejects_non_finite_servings_without_traceback(self):
+        for value in ('nan', 'inf'):
+            result = subprocess.run([sys.executable, str(ROOT / 'pantry.py'), '--db', ':memory:', 'needs', 'Emergency tomato pasta', value], capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn('Traceback', result.stderr)
 
+    def test_recipe_tables_upgrade_without_changing_ledger(self):
+        before = self.stock('Flour')
+        self.db.executescript((ROOT / 'schema.sql').read_text())
+        self.assertEqual(self.stock('Flour'), before)
 
 if __name__ == '__main__': unittest.main()

@@ -29,6 +29,23 @@ FROM current_stock
 WHERE quantity < reorder_at
 ORDER BY to_buy DESC, name;
 
+CREATE TABLE IF NOT EXISTS recipes (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  CHECK (length(trim(name)) > 0)
+);
+
+CREATE TABLE IF NOT EXISTS recipe_ingredients (
+  recipe_id INTEGER NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
+  item_id INTEGER NOT NULL REFERENCES pantry_items(id),
+  quantity_per_serving REAL NOT NULL CHECK (typeof(quantity_per_serving) IN ('integer', 'real') AND quantity_per_serving > 0 AND quantity_per_serving < 1000000000),
+  PRIMARY KEY (recipe_id, item_id)
+);
+
+CREATE VIEW IF NOT EXISTS recipe_requirements AS
+SELECT r.name AS recipe, i.name AS ingredient, ri.quantity_per_serving, i.unit
+FROM recipes r JOIN recipe_ingredients ri ON ri.recipe_id = r.id JOIN pantry_items i ON i.id = ri.item_id;
+
 CREATE TRIGGER IF NOT EXISTS prevent_negative_stock
 AFTER INSERT ON stock_movements
 BEGIN
