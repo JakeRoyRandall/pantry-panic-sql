@@ -6,7 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT))
-from pantry import ensure_recipes, needs
+from pantry import ensure_recipes, needs, plan
 
 class PantrySQLTest(unittest.TestCase):
     def setUp(self):
@@ -82,5 +82,32 @@ class PantrySQLTest(unittest.TestCase):
         before = self.stock('Flour')
         self.db.executescript((ROOT / 'schema.sql').read_text())
         self.assertEqual(self.stock('Flour'), before)
+
+    def test_meal_plan_aggregates_shared_ingredients_and_replaces_entries(self):
+        self.db.execute("INSERT INTO recipes(name) VALUES ('Floury tomato toast')")
+        rid = self.db.execute("SELECT id FROM recipes WHERE name = 'Floury tomato toast'").fetchone()[0]
+        flour = self.db.execute("SELECT id FROM pantry_items WHERE name = 'Flour'").fetchone()[0]
+        tomato = self.db.execute("SELECT id FROM pantry_items WHERE name = 'Tinned tomatoes'").fetchone()[0]
+        self.db.executemany('INSERT INTO recipe_ingredients VALUES (?, ?, ?)', [(rid, flour, 100), (rid, tomato, 1)])
+        self.db.execute("INSERT INTO saved_meal_plan VALUES ((SELECT id FROM recipes WHERE name = 'Emergency tomato pasta'), 2)")
+        self.db.execute("INSERT INTO saved_meal_plan VALUES (?, 3)", (rid,))
+        row = self.db.execute("SELECT needed, available, missing FROM meal_plan_requirements WHERE ingredient = 'Tinned tomatoes'").fetchone()
+        self.assertEqual((row['needed'], row['available'], row['missing']), (5.0, 1.0, 4.0))
+        self.db.execute("INSERT INTO saved_meal_plan VALUES ((SELECT id FROM recipes WHERE name = 'Emergency tomato pasta'), 1) ON CONFLICT(recipe_id) DO UPDATE SET servings = excluded.servings")
+        self.assertEqual(self.db.execute("SELECT servings FROM saved_meal_plan WHERE recipe_id = (SELECT id FROM recipes WHERE name = 'Emergency tomato pasta')").fetchone()[0], 1)
+
+    def test_meal_plan_persists_reload_and_clears_without_stock_mutation(self):
+        before = self.stock('Pasta')
+        self.db.execute("INSERT INTO saved_meal_plan VALUES ((SELECT id FROM recipes WHERE name = 'Emergency tomato pasta'), 2)")
+        self.db.commit()
+        self.db.executescript((ROOT / 'schema.sql').read_text())
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM saved_meal_plan').fetchone()[0], 1)
+        self.db.execute('DELETE FROM saved_meal_plan'); self.db.commit()
+        self.assertEqual(self.stock('Pasta'), before)
+
+    def test_plan_rejects_non_finite_and_empty_recipe(self):
+        with self.assertRaises(ValueError): plan(self.db, 'Emergency tomato pasta', float('nan'))
+        self.db.execute("INSERT INTO recipes(name) VALUES ('Empty plan')")
+        with self.assertRaises(ValueError): plan(self.db, 'Empty plan', 1)
 
 if __name__ == '__main__': unittest.main()

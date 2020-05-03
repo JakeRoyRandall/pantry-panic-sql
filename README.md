@@ -15,6 +15,9 @@ python3 pantry.py --db pantry.db shopping
 python3 pantry.py --db pantry.db move Flour -200 used
 python3 pantry.py --db pantry.db recipes
 python3 pantry.py --db pantry.db needs 'Emergency tomato pasta' 3
+python3 pantry.py --db pantry.db plan 'Emergency tomato pasta' 3
+python3 pantry.py --db pantry.db planned
+python3 pantry.py --db pantry.db clear-plan
 ```
 
 To start fresh, remove the local `pantry.db` and rerun the seed command. Tests use an in-memory database and never touch that file:
@@ -24,7 +27,5 @@ python3 -m unittest -v tests/test_pantry.py
 ```
 
 The sample foods and recipes are fictional planning data. This tool is inventory math and does not provide food-safety advice.
-
-Standalone snapshot tests: `python3 test_pantry.py`.
 
 Standalone snapshot tests: `python3 test_pantry.py`. Git author dates are deliberately assigned for calendar art; committer timestamps record actual September 2026 creation.

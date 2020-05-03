@@ -46,6 +46,19 @@ CREATE VIEW IF NOT EXISTS recipe_requirements AS
 SELECT r.name AS recipe, i.name AS ingredient, ri.quantity_per_serving, i.unit
 FROM recipes r JOIN recipe_ingredients ri ON ri.recipe_id = r.id JOIN pantry_items i ON i.id = ri.item_id;
 
+CREATE TABLE IF NOT EXISTS saved_meal_plan (
+  recipe_id INTEGER PRIMARY KEY REFERENCES recipes(id) ON DELETE CASCADE,
+  servings REAL NOT NULL CHECK (typeof(servings) IN ('integer', 'real') AND servings > 0 AND servings <= 100000)
+);
+
+CREATE VIEW IF NOT EXISTS meal_plan_requirements AS
+SELECT i.name AS ingredient, i.unit, SUM(ri.quantity_per_serving * p.servings) AS needed,
+       COALESCE(cs.quantity, 0) AS available,
+       MAX(0, SUM(ri.quantity_per_serving * p.servings) - COALESCE(cs.quantity, 0)) AS missing
+FROM saved_meal_plan p JOIN recipe_ingredients ri ON ri.recipe_id = p.recipe_id
+JOIN pantry_items i ON i.id = ri.item_id LEFT JOIN current_stock cs ON cs.id = i.id
+GROUP BY i.id;
+
 CREATE TRIGGER IF NOT EXISTS prevent_negative_stock
 AFTER INSERT ON stock_movements
 BEGIN
