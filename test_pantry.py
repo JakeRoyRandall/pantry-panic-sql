@@ -6,7 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT))
-from pantry import connect, cook_plan, ensure_recipes, needs, plan, report, set_reserve, shopping
+from pantry import add_recipe, connect, cook_plan, ensure_recipes, needs, plan, report, set_reserve, shopping
 
 class PantrySQLTest(unittest.TestCase):
     def setUp(self):
@@ -53,6 +53,21 @@ class PantrySQLTest(unittest.TestCase):
         self.db.execute('UPDATE pantry_items SET reorder_at = 0'); self.db.commit(); output = io.StringIO()
         with contextlib.redirect_stdout(output): shopping(self.db, 'csv')
         self.assertEqual(output.getvalue(), 'name,quantity,unit,to_buy\n')
+
+    def test_add_recipe_is_atomic_and_usable(self):
+        add_recipe(self.db, 'Balcony pasta', ['Pasta=80', 'Tinned tomatoes=1'])
+        row = self.db.execute("SELECT unit, quantity_per_serving FROM recipe_requirements WHERE recipe = 'Balcony pasta' ORDER BY ingredient").fetchall()
+        self.assertEqual([(r['unit'], r['quantity_per_serving']) for r in row], [('g', 80.0), ('each', 1.0)])
+        plan(self.db, 'Balcony pasta', 1)
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM saved_meal_plan').fetchone()[0], 1)
+
+    def test_add_recipe_rejects_unknown_duplicate_and_existing_without_partial_rows(self):
+        before = self.db.execute('SELECT COUNT(*) FROM recipes').fetchone()[0]
+        with self.assertRaises(ValueError): add_recipe(self.db, 'Broken', ['Pasta=80', 'No item=1'])
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM recipes').fetchone()[0], before)
+        with self.assertRaises(ValueError): add_recipe(self.db, 'Duplicate', ['Pasta=80', 'Pasta=40'])
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM recipes WHERE name = 'Duplicate'").fetchone()[0], 0)
+        with self.assertRaises(sqlite3.IntegrityError): add_recipe(self.db, 'Emergency tomato pasta', ['Pasta=1'])
 
     def test_constraints_reject_bad_item_and_movement(self):
         with self.assertRaises(sqlite3.IntegrityError): self.db.execute("INSERT INTO pantry_items(id, name, unit, reorder_at) VALUES (99, 'Salt', 'cups', 2)")

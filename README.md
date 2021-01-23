@@ -35,3 +35,5 @@ Reserve ingredients with `python3 pantry.py --db pantry.db set-reserve Pasta 200
 Run `python3 pantry.py --db pantry.db cook-plan` to consume the entire saved meal plan. Shared ingredients are aggregated, reserves are protected, and the plan clears only after all ledger debits succeed. An immediate transaction locks before checking availability; shortages, empty plans, or contention do not partially consume stock.
 
 Export the shopping list with `python3 pantry.py --db pantry.db shopping --format csv`. CSV uses name, current quantity, unit, and to_buy columns, sorted by purchase quantity descending then name; empty lists emit only the header.
+
+Create a recipe with `python3 pantry.py --db pantry.db add-recipe "Lunch" "Pasta=80" "Tinned tomatoes=1"`. Each quantity is per serving in the existing pantry item unit. Quote each argument when names contain spaces. Existing recipes, duplicate ingredients, unknown items, and invalid quantities are rejected; insertion is atomic.
