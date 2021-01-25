@@ -143,6 +143,15 @@ def add_recipe(db, name, specifications):
         db.executemany('INSERT INTO recipe_ingredients(recipe_id, item_id, quantity_per_serving) VALUES (?, ?, ?)', [(cursor.lastrowid, item_id, amount) for item_id, amount in ingredients])
     print(f'Recipe added: {name}.')
 
+def add_item(db, name, unit, minimum=0, initial=0):
+    if not name.strip(): raise ValueError('item name is required')
+    for label, amount in (('minimum', minimum), ('initial', initial)):
+        if not math.isfinite(amount) or amount < 0 or amount >= 1000000000: raise ValueError(f'{label} must be finite and between 0 and 999999999')
+    with db:
+        cursor = db.execute('INSERT INTO pantry_items(name, unit, reorder_at, reserve_quantity) VALUES (?, ?, ?, 0)', (name, unit, minimum))
+        if initial > 0: db.execute("INSERT INTO stock_movements(item_id, delta, reason) VALUES (?, ?, 'opening')", (cursor.lastrowid, initial))
+    print(f'Item added: {name}.')
+
 def move(db, name, delta, reason):
     with db:
         item = db.execute('SELECT id FROM pantry_items WHERE name = ?', (name,)).fetchone()
@@ -163,6 +172,7 @@ def main():
     use = sub.add_parser('move'); use.add_argument('name'); use.add_argument('delta', type=float); use.add_argument('reason', choices=['used', 'bought', 'expired'])
     reserve = sub.add_parser('set-reserve'); reserve.add_argument('name'); reserve.add_argument('amount', type=float)
     recipe_add = sub.add_parser('add-recipe'); recipe_add.add_argument('name'); recipe_add.add_argument('ingredients', nargs='+')
+    item_add = sub.add_parser('add-item'); item_add.add_argument('name'); item_add.add_argument('unit', choices=['g', 'ml', 'each']); item_add.add_argument('--minimum', type=float, default=0); item_add.add_argument('--initial', type=float, default=0)
     try:
         args = parser.parse_args(); db = connect(args.db)
         if args.command == 'seed':
@@ -179,6 +189,7 @@ def main():
             elif args.command == 'cook-plan': cook_plan(db)
             elif args.command == 'set-reserve': set_reserve(db, args.name, args.amount)
             elif args.command == 'add-recipe': add_recipe(db, args.name, args.ingredients)
+            elif args.command == 'add-item': add_item(db, args.name, args.unit, args.minimum, args.initial)
             else: move(db, args.name, args.delta, args.reason); print('Stock movement recorded.')
     except (sqlite3.Error, OSError, ValueError) as error:
         if 'db' in locals(): db.rollback()

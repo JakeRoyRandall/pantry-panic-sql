@@ -37,3 +37,5 @@ Run `python3 pantry.py --db pantry.db cook-plan` to consume the entire saved mea
 Export the shopping list with `python3 pantry.py --db pantry.db shopping --format csv`. CSV uses name, current quantity, unit, and to_buy columns, sorted by purchase quantity descending then name; empty lists emit only the header.
 
 Create a recipe with `python3 pantry.py --db pantry.db add-recipe "Lunch" "Pasta=80" "Tinned tomatoes=1"`. Each quantity is per serving in the existing pantry item unit. Quote each argument when names contain spaces. Existing recipes, duplicate ingredients, unknown items, and invalid quantities are rejected; insertion is atomic.
+
+Add pantry stock with `python3 pantry.py --db pantry.db add-item "Chili flakes" g --minimum 20 --initial 50`. Units are g, ml, or each. Initial stock is an opening ledger movement and the item creation is atomic. Duplicate names and invalid quantities are rejected.
