@@ -29,3 +29,5 @@ python3 -m unittest -v tests/test_pantry.py
 The sample foods and recipes are fictional planning data. This tool is inventory math and does not provide food-safety advice.
 
 Standalone snapshot tests: `python3 test_pantry.py`. Git author dates are deliberately assigned for calendar art; committer timestamps record actual September 2026 creation.
+
+Reserve ingredients with `python3 pantry.py --db pantry.db set-reserve Pasta 200`. Reserves use the item's existing unit. Raw stock and ledger history stay unchanged; recipe and saved-plan recommendations use `max(stock - reserve, 0)`. Existing databases migrate with reserve zero. `report` shows raw, reserved, and usable stock.

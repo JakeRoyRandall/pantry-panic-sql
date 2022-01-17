@@ -6,7 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT))
-from pantry import ensure_recipes, needs, plan
+from pantry import connect, ensure_recipes, needs, plan, set_reserve
 
 class PantrySQLTest(unittest.TestCase):
     def setUp(self):
@@ -28,7 +28,7 @@ class PantrySQLTest(unittest.TestCase):
         self.assertEqual(self.db.execute('SELECT name FROM shopping_list').fetchone()[0], 'Coffee')
 
     def test_constraints_reject_bad_item_and_movement(self):
-        with self.assertRaises(sqlite3.IntegrityError): self.db.execute("INSERT INTO pantry_items VALUES (99, 'Salt', 'cups', 2)")
+        with self.assertRaises(sqlite3.IntegrityError): self.db.execute("INSERT INTO pantry_items(id, name, unit, reorder_at) VALUES (99, 'Salt', 'cups', 2)")
         with self.assertRaises(sqlite3.IntegrityError): self.db.execute("INSERT INTO stock_movements(item_id, delta, reason) VALUES (1, 0, 'used')")
         with self.assertRaises(sqlite3.IntegrityError): self.db.execute("INSERT INTO stock_movements(item_id, delta, reason) VALUES (1, 'lots', 'bought')")
         with self.assertRaises(sqlite3.IntegrityError): self.db.execute("INSERT INTO stock_movements(item_id, delta, reason) VALUES (1, 5, 'used')")
@@ -109,5 +109,31 @@ class PantrySQLTest(unittest.TestCase):
         with self.assertRaises(ValueError): plan(self.db, 'Emergency tomato pasta', float('nan'))
         self.db.execute("INSERT INTO recipes(name) VALUES ('Empty plan')")
         with self.assertRaises(ValueError): plan(self.db, 'Empty plan', 1)
+
+    def test_reserve_is_subtracted_once_and_can_exceed_stock(self):
+        set_reserve(self.db, 'Pasta', 1000)
+        row = self.db.execute("SELECT quantity, reserve_quantity, usable_quantity FROM current_stock WHERE name = 'Pasta'").fetchone()
+        self.assertEqual((row['quantity'], row['reserve_quantity'], row['usable_quantity']), (900.0, 1000.0, 0.0))
+        self.db.execute("INSERT INTO saved_meal_plan VALUES ((SELECT id FROM recipes WHERE name = 'Emergency tomato pasta'), 2)")
+        need = self.db.execute("SELECT missing FROM meal_plan_requirements WHERE ingredient = 'Pasta'").fetchone()[0]
+        self.assertEqual(need, 160.0)
+
+    def test_reserve_rejects_non_finite_and_unknown_items(self):
+        with self.assertRaises(ValueError): set_reserve(self.db, 'Pasta', float('nan'))
+        with self.assertRaises(ValueError): set_reserve(self.db, 'No such item', 1)
+
+    def test_legacy_database_migrates_reserve_without_changing_ledger(self):
+        import tempfile, os
+        fd, path = tempfile.mkstemp(); os.close(fd)
+        try:
+            old = sqlite3.connect(path)
+            old.executescript("CREATE TABLE pantry_items (id INTEGER PRIMARY KEY, name TEXT, unit TEXT, reorder_at REAL); CREATE TABLE stock_movements (id INTEGER PRIMARY KEY, item_id INTEGER, delta REAL, reason TEXT); INSERT INTO pantry_items VALUES (1, 'Legacy flour', 'g', 10); INSERT INTO stock_movements VALUES (1, 1, 25, 'opening');")
+            old.commit(); old.close()
+            migrated = connect(path)
+            row = migrated.execute("SELECT quantity, reserve_quantity FROM current_stock WHERE name = 'Legacy flour'").fetchone()
+            self.assertEqual((row['quantity'], row['reserve_quantity']), (25.0, 0.0))
+            migrated.close()
+        finally:
+            os.unlink(path)
 
 if __name__ == '__main__': unittest.main()

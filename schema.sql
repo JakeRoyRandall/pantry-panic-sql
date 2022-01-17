@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS pantry_items (
   name TEXT NOT NULL UNIQUE COLLATE NOCASE,
   unit TEXT NOT NULL CHECK (unit IN ('g', 'ml', 'each')),
   reorder_at REAL NOT NULL CHECK (typeof(reorder_at) IN ('integer', 'real') AND reorder_at >= 0 AND reorder_at <= 1000000000),
+  reserve_quantity REAL NOT NULL DEFAULT 0 CHECK (typeof(reserve_quantity) IN ('integer', 'real') AND reserve_quantity >= 0 AND reserve_quantity < 1000000000),
   CHECK (length(trim(name)) > 0)
 );
 
@@ -17,16 +18,18 @@ CREATE TABLE IF NOT EXISTS stock_movements (
 );
 
 CREATE VIEW IF NOT EXISTS current_stock AS
-SELECT i.id, i.name, i.unit, i.reorder_at,
-       COALESCE(SUM(m.delta), 0) AS quantity
+SELECT i.id, i.name, i.unit, i.reorder_at, i.reserve_quantity,
+       COALESCE(SUM(m.delta), 0) AS quantity,
+       MAX(0, COALESCE(SUM(m.delta), 0) - i.reserve_quantity) AS usable_quantity
 FROM pantry_items i LEFT JOIN stock_movements m ON m.item_id = i.id
 GROUP BY i.id;
 
 CREATE VIEW IF NOT EXISTS shopping_list AS
 SELECT name, unit, quantity, reorder_at,
-       ROUND(reorder_at - quantity, 1) AS to_buy
+       reserve_quantity, usable_quantity,
+       ROUND(reorder_at - usable_quantity, 1) AS to_buy
 FROM current_stock
-WHERE quantity < reorder_at
+WHERE usable_quantity < reorder_at
 ORDER BY to_buy DESC, name;
 
 CREATE TABLE IF NOT EXISTS recipes (
@@ -53,8 +56,8 @@ CREATE TABLE IF NOT EXISTS saved_meal_plan (
 
 CREATE VIEW IF NOT EXISTS meal_plan_requirements AS
 SELECT i.name AS ingredient, i.unit, SUM(ri.quantity_per_serving * p.servings) AS needed,
-       COALESCE(cs.quantity, 0) AS available,
-       MAX(0, SUM(ri.quantity_per_serving * p.servings) - COALESCE(cs.quantity, 0)) AS missing
+       COALESCE(cs.usable_quantity, 0) AS available,
+       MAX(0, SUM(ri.quantity_per_serving * p.servings) - COALESCE(cs.usable_quantity, 0)) AS missing
 FROM saved_meal_plan p JOIN recipe_ingredients ri ON ri.recipe_id = p.recipe_id
 JOIN pantry_items i ON i.id = ri.item_id LEFT JOIN current_stock cs ON cs.id = i.id
 GROUP BY i.id;

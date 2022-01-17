@@ -9,6 +9,12 @@ ROOT = pathlib.Path(__file__).parent
 def connect(path):
     db = sqlite3.connect(path)
     db.row_factory = sqlite3.Row
+    columns = {row[1] for row in db.execute('PRAGMA table_info(pantry_items)')}
+    if columns and 'reserve_quantity' not in columns:
+        db.execute("ALTER TABLE pantry_items ADD COLUMN reserve_quantity REAL NOT NULL DEFAULT 0 CHECK (typeof(reserve_quantity) IN ('integer', 'real') AND reserve_quantity >= 0 AND reserve_quantity < 1000000000)")
+        db.commit()
+    for view in ('shopping_list', 'meal_plan_requirements', 'current_stock'):
+        db.execute(f'DROP VIEW IF EXISTS {view}')
     db.executescript((ROOT / 'schema.sql').read_text())
     return db
 
@@ -34,8 +40,8 @@ def ensure_recipes(db):
 
 def report(db):
     print('PANTRY PANIC // current stock')
-    for row in db.execute('SELECT name, quantity, unit FROM current_stock ORDER BY name'):
-        print(f"{row['name']}: {row['quantity']:g}{row['unit']}")
+    for row in db.execute('SELECT name, quantity, unit, reserve_quantity, usable_quantity FROM current_stock ORDER BY name'):
+        print(f"{row['name']}: {row['quantity']:g}{row['unit']} (reserve {row['reserve_quantity']:g}{row['unit']}, usable {row['usable_quantity']:g}{row['unit']})")
 
 def shopping(db):
     print('SHOPPING LIST // buy before the recipe notices')
@@ -54,8 +60,8 @@ def needs(db, name, servings):
     if db.execute('SELECT 1 FROM recipe_ingredients WHERE recipe_id = ? LIMIT 1', (recipe['id'],)).fetchone() is None:
         raise ValueError(f'recipe has no ingredients: {name}')
     rows = db.execute('''SELECT i.name, i.unit, ri.quantity_per_serving * ? AS needed,
-      COALESCE(cs.quantity, 0) AS available,
-      MAX(0, ri.quantity_per_serving * ? - COALESCE(cs.quantity, 0)) AS missing
+      COALESCE(cs.usable_quantity, 0) AS available,
+      MAX(0, ri.quantity_per_serving * ? - COALESCE(cs.usable_quantity, 0)) AS missing
       FROM recipe_ingredients ri JOIN pantry_items i ON i.id = ri.item_id
       LEFT JOIN current_stock cs ON cs.id = i.id WHERE ri.recipe_id = ? ORDER BY i.name''', (servings, servings, recipe['id']))
     print(f"{name} for {servings:g} serving(s)")
@@ -84,6 +90,14 @@ def clear_plan(db):
     with db: db.execute('DELETE FROM saved_meal_plan')
     print('Meal plan cleared.')
 
+def set_reserve(db, name, amount):
+    if not math.isfinite(amount) or amount < 0 or amount >= 1000000000:
+        raise ValueError('reserve must be finite and between 0 and 999999999')
+    with db:
+        changed = db.execute('UPDATE pantry_items SET reserve_quantity = ? WHERE name = ?', (amount, name)).rowcount
+        if changed == 0: raise ValueError(f'unknown pantry item: {name}')
+    print(f'Reserve set: {name} {amount:g}.')
+
 def move(db, name, delta, reason):
     with db:
         item = db.execute('SELECT id FROM pantry_items WHERE name = ?', (name,)).fetchone()
@@ -100,6 +114,7 @@ def main():
     meal = sub.add_parser('plan'); meal.add_argument('recipe'); meal.add_argument('servings', type=float)
     sub.add_parser('planned'); sub.add_parser('clear-plan')
     use = sub.add_parser('move'); use.add_argument('name'); use.add_argument('delta', type=float); use.add_argument('reason', choices=['used', 'bought', 'expired'])
+    reserve = sub.add_parser('set-reserve'); reserve.add_argument('name'); reserve.add_argument('amount', type=float)
     try:
         args = parser.parse_args(); db = connect(args.db)
         if args.command == 'seed':
@@ -113,6 +128,7 @@ def main():
             elif args.command == 'plan': plan(db, args.recipe, args.servings)
             elif args.command == 'planned': planned(db)
             elif args.command == 'clear-plan': clear_plan(db)
+            elif args.command == 'set-reserve': set_reserve(db, args.name, args.amount)
             else: move(db, args.name, args.delta, args.reason); print('Stock movement recorded.')
     except (sqlite3.Error, OSError, ValueError) as error:
         if 'db' in locals(): db.rollback()
