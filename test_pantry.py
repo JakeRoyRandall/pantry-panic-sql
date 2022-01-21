@@ -6,7 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT))
-from pantry import connect, ensure_recipes, needs, plan, set_reserve
+from pantry import connect, cook_plan, ensure_recipes, needs, plan, report, set_reserve
 
 class PantrySQLTest(unittest.TestCase):
     def setUp(self):
@@ -26,6 +26,13 @@ class PantrySQLTest(unittest.TestCase):
         self.assertEqual(self.stock('Flour'), 1450)
         self.assertEqual(self.stock('Coffee'), 40)
         self.assertEqual(self.db.execute('SELECT name FROM shopping_list').fetchone()[0], 'Coffee')
+
+    def test_report_includes_reserve_columns(self):
+        import io
+        output = io.StringIO()
+        import contextlib
+        with contextlib.redirect_stdout(output): report(self.db)
+        self.assertIn('reserve', output.getvalue())
 
     def test_constraints_reject_bad_item_and_movement(self):
         with self.assertRaises(sqlite3.IntegrityError): self.db.execute("INSERT INTO pantry_items(id, name, unit, reorder_at) VALUES (99, 'Salt', 'cups', 2)")
@@ -133,6 +140,40 @@ class PantrySQLTest(unittest.TestCase):
             row = migrated.execute("SELECT quantity, reserve_quantity FROM current_stock WHERE name = 'Legacy flour'").fetchone()
             self.assertEqual((row['quantity'], row['reserve_quantity']), (25.0, 0.0))
             migrated.close()
+        finally:
+            os.unlink(path)
+
+    def test_cook_plan_debits_shared_requirements_and_clears_once(self):
+        self.db.execute("INSERT INTO saved_meal_plan VALUES ((SELECT id FROM recipes WHERE name = 'Emergency tomato pasta'), 0.5)")
+        self.db.commit()
+        before_pasta, before_tomato = self.stock('Pasta'), self.stock('Tinned tomatoes')
+        cook_plan(self.db)
+        self.assertEqual((self.stock('Pasta'), self.stock('Tinned tomatoes')), (before_pasta - 40, before_tomato - 0.5))
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM saved_meal_plan').fetchone()[0], 0)
+        with self.assertRaises(ValueError): cook_plan(self.db)
+
+    def test_cook_shortage_rolls_back_ledger_and_plan_and_respects_reserve(self):
+        set_reserve(self.db, 'Pasta', 850)
+        self.db.execute("INSERT INTO saved_meal_plan VALUES ((SELECT id FROM recipes WHERE name = 'Emergency tomato pasta'), 1)")
+        self.db.commit()
+        before = self.stock('Pasta')
+        with self.assertRaises(ValueError): cook_plan(self.db)
+        self.assertEqual(self.stock('Pasta'), before)
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM saved_meal_plan').fetchone()[0], 1)
+
+    def test_cook_plan_contention_is_locked_before_read_check_debit(self):
+        import tempfile, os
+        fd, path = tempfile.mkstemp(); os.close(fd)
+        try:
+            first = connect(path); first.executescript((ROOT / 'seed.sql').read_text()); first.commit(); ensure_recipes(first)
+            first.execute("INSERT INTO saved_meal_plan VALUES ((SELECT id FROM recipes WHERE name = 'Emergency tomato pasta'), 1)"); first.commit()
+            second = connect(path); second.execute('PRAGMA busy_timeout = 50')
+            before = second.execute("SELECT quantity FROM current_stock WHERE name = 'Pasta'").fetchone()[0]
+            first.execute('BEGIN IMMEDIATE')
+            with self.assertRaises(sqlite3.OperationalError): cook_plan(second)
+            self.assertEqual(second.execute('SELECT quantity FROM current_stock WHERE name = \'Pasta\'').fetchone()[0], before)
+            self.assertEqual(second.execute('SELECT COUNT(*) FROM saved_meal_plan').fetchone()[0], 1)
+            first.rollback(); second.close(); first.close()
         finally:
             os.unlink(path)
 

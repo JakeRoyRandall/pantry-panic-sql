@@ -90,6 +90,24 @@ def clear_plan(db):
     with db: db.execute('DELETE FROM saved_meal_plan')
     print('Meal plan cleared.')
 
+def cook_plan(db):
+    db.execute('BEGIN IMMEDIATE')
+    try:
+        if db.execute('SELECT COUNT(*) FROM saved_meal_plan').fetchone()[0] == 0:
+            raise ValueError('meal plan is empty')
+        rows = db.execute('SELECT i.id, ingredient, needed, available, missing FROM meal_plan_requirements r JOIN pantry_items i ON i.name = r.ingredient').fetchall()
+        if not rows: raise ValueError('meal plan has no ingredients')
+        shortages = [f"{row['ingredient']} missing {row['missing']:g}" for row in rows if row['missing'] > 0]
+        if shortages: raise ValueError('cannot cook plan: ' + ', '.join(shortages))
+        for row in rows:
+            db.execute("INSERT INTO stock_movements(item_id, delta, reason) VALUES (?, ?, 'used')", (row['id'], -row['needed']))
+        db.execute('DELETE FROM saved_meal_plan')
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    print('Meal plan cooked: stock debited and plan cleared.')
+
 def set_reserve(db, name, amount):
     if not math.isfinite(amount) or amount < 0 or amount >= 1000000000:
         raise ValueError('reserve must be finite and between 0 and 999999999')
@@ -112,7 +130,7 @@ def main():
     sub.add_parser('seed'); sub.add_parser('report'); sub.add_parser('shopping'); sub.add_parser('recipes')
     need = sub.add_parser('needs'); need.add_argument('recipe'); need.add_argument('servings', type=float)
     meal = sub.add_parser('plan'); meal.add_argument('recipe'); meal.add_argument('servings', type=float)
-    sub.add_parser('planned'); sub.add_parser('clear-plan')
+    sub.add_parser('planned'); sub.add_parser('clear-plan'); sub.add_parser('cook-plan')
     use = sub.add_parser('move'); use.add_argument('name'); use.add_argument('delta', type=float); use.add_argument('reason', choices=['used', 'bought', 'expired'])
     reserve = sub.add_parser('set-reserve'); reserve.add_argument('name'); reserve.add_argument('amount', type=float)
     try:
@@ -128,6 +146,7 @@ def main():
             elif args.command == 'plan': plan(db, args.recipe, args.servings)
             elif args.command == 'planned': planned(db)
             elif args.command == 'clear-plan': clear_plan(db)
+            elif args.command == 'cook-plan': cook_plan(db)
             elif args.command == 'set-reserve': set_reserve(db, args.name, args.amount)
             else: move(db, args.name, args.delta, args.reason); print('Stock movement recorded.')
     except (sqlite3.Error, OSError, ValueError) as error:
