@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import csv
+import json
 import math
 import pathlib
 import sqlite3
@@ -152,6 +153,21 @@ def add_item(db, name, unit, minimum=0, initial=0):
         if initial > 0: db.execute("INSERT INTO stock_movements(item_id, delta, reason) VALUES (?, ?, 'opening')", (cursor.lastrowid, initial))
     print(f'Item added: {name}.')
 
+def history(db, item_name=None, limit=50, output_format='text'):
+    if not isinstance(limit, int) or limit < 1 or limit > 1000: raise ValueError('history limit must be an integer from 1 to 1000')
+    params = []
+    where = ''
+    if item_name is not None:
+        if db.execute('SELECT 1 FROM pantry_items WHERE name = ?', (item_name,)).fetchone() is None: raise ValueError(f'unknown pantry item: {item_name}')
+        where = 'WHERE i.name = ?'; params.append(item_name)
+    rows = db.execute(f'''SELECT m.id, i.name AS item, m.delta, m.reason, m.happened_at
+      FROM stock_movements m JOIN pantry_items i ON i.id = m.item_id {where}
+      ORDER BY m.id DESC LIMIT ?''', (*params, limit)).fetchall()
+    records = [dict(row) for row in rows]
+    if output_format == 'json': print(json.dumps(records, separators=(',', ':'))); return
+    print('STOCK HISTORY // newest first')
+    for row in records: print(f"#{row['id']} {row['item']}: {row['delta']:g} ({row['reason']}) {row['happened_at']}")
+
 def move(db, name, delta, reason):
     with db:
         item = db.execute('SELECT id FROM pantry_items WHERE name = ?', (name,)).fetchone()
@@ -173,6 +189,7 @@ def main():
     reserve = sub.add_parser('set-reserve'); reserve.add_argument('name'); reserve.add_argument('amount', type=float)
     recipe_add = sub.add_parser('add-recipe'); recipe_add.add_argument('name'); recipe_add.add_argument('ingredients', nargs='+')
     item_add = sub.add_parser('add-item'); item_add.add_argument('name'); item_add.add_argument('unit', choices=['g', 'ml', 'each']); item_add.add_argument('--minimum', type=float, default=0); item_add.add_argument('--initial', type=float, default=0)
+    hist = sub.add_parser('history'); hist.add_argument('--item'); hist.add_argument('--limit', type=int, default=50); hist.add_argument('--format', choices=['text', 'json'], default='text')
     try:
         args = parser.parse_args(); db = connect(args.db)
         if args.command == 'seed':
@@ -190,6 +207,7 @@ def main():
             elif args.command == 'set-reserve': set_reserve(db, args.name, args.amount)
             elif args.command == 'add-recipe': add_recipe(db, args.name, args.ingredients)
             elif args.command == 'add-item': add_item(db, args.name, args.unit, args.minimum, args.initial)
+            elif args.command == 'history': history(db, args.item, args.limit, args.format)
             else: move(db, args.name, args.delta, args.reason); print('Stock movement recorded.')
     except (sqlite3.Error, OSError, ValueError) as error:
         if 'db' in locals(): db.rollback()

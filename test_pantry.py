@@ -6,7 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT))
-from pantry import add_item, add_recipe, connect, cook_plan, ensure_recipes, needs, plan, report, set_reserve, shopping
+from pantry import add_item, add_recipe, connect, cook_plan, ensure_recipes, history, needs, plan, report, set_reserve, shopping
 
 class PantrySQLTest(unittest.TestCase):
     def setUp(self):
@@ -82,6 +82,16 @@ class PantrySQLTest(unittest.TestCase):
         self.assertEqual(self.db.execute('SELECT COUNT(*) FROM pantry_items').fetchone()[0], before)
         with self.assertRaises(sqlite3.IntegrityError): add_item(self.db, 'Pasta', 'g', initial=10)
         self.assertEqual(self.db.execute("SELECT COUNT(*) FROM stock_movements WHERE reason = 'opening' AND delta = 10").fetchone()[0], 0)
+
+    def test_history_filter_limit_order_and_json(self):
+        import io, contextlib, json
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output): history(self.db, 'Flour', 2, 'json')
+        records = json.loads(output.getvalue())
+        self.assertEqual(len(records), 2); self.assertEqual(records[0]['item'], 'Flour'); self.assertGreater(records[0]['id'], records[1]['id'])
+        self.assertEqual({record['reason'] for record in records}, {'opening', 'used'})
+        with self.assertRaises(ValueError): history(self.db, 'No item', 1)
+        with self.assertRaises(ValueError): history(self.db, None, 0)
 
     def test_constraints_reject_bad_item_and_movement(self):
         with self.assertRaises(sqlite3.IntegrityError): self.db.execute("INSERT INTO pantry_items(id, name, unit, reorder_at) VALUES (99, 'Salt', 'cups', 2)")
