@@ -33,3 +33,5 @@ Standalone snapshot tests: `python3 test_pantry.py`. Git author dates are delibe
 Reserve ingredients with `python3 pantry.py --db pantry.db set-reserve Pasta 200`. Reserves use the item's existing unit. Raw stock and ledger history stay unchanged; recipe and saved-plan recommendations use `max(stock - reserve, 0)`. Existing databases migrate with reserve zero. `report` shows raw, reserved, and usable stock.
 
 Run `python3 pantry.py --db pantry.db cook-plan` to consume the entire saved meal plan. Shared ingredients are aggregated, reserves are protected, and the plan clears only after all ledger debits succeed. An immediate transaction locks before checking availability; shortages, empty plans, or contention do not partially consume stock.
+
+Export the shopping list with `python3 pantry.py --db pantry.db shopping --format csv`. CSV uses name, current quantity, unit, and to_buy columns, sorted by purchase quantity descending then name; empty lists emit only the header.

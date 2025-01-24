@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 import argparse
+import csv
 import math
 import pathlib
 import sqlite3
+import sys
 
 ROOT = pathlib.Path(__file__).parent
 
@@ -43,9 +45,15 @@ def report(db):
     for row in db.execute('SELECT name, quantity, unit, reserve_quantity, usable_quantity FROM current_stock ORDER BY name'):
         print(f"{row['name']}: {row['quantity']:g}{row['unit']} (reserve {row['reserve_quantity']:g}{row['unit']}, usable {row['usable_quantity']:g}{row['unit']})")
 
-def shopping(db):
+def shopping(db, output_format='text'):
+    rows = db.execute('SELECT name, quantity, unit, to_buy FROM shopping_list ORDER BY to_buy DESC, name').fetchall()
+    if output_format == 'csv':
+        writer = csv.writer(sys.stdout, lineterminator='\n')
+        writer.writerow(['name', 'quantity', 'unit', 'to_buy'])
+        writer.writerows([[row['name'], row['quantity'], row['unit'], row['to_buy']] for row in rows])
+        return
     print('SHOPPING LIST // buy before the recipe notices')
-    for row in db.execute('SELECT name, to_buy, unit FROM shopping_list'):
+    for row in rows:
         print(f"{row['name']}: {row['to_buy']:g}{row['unit']}")
 
 def recipes(db):
@@ -127,7 +135,9 @@ def main():
     parser = argparse.ArgumentParser(description='A tiny SQL pantry inventory planner.')
     parser.add_argument('--db', default='pantry.db')
     sub = parser.add_subparsers(dest='command', required=True)
-    sub.add_parser('seed'); sub.add_parser('report'); sub.add_parser('shopping'); sub.add_parser('recipes')
+    sub.add_parser('seed'); sub.add_parser('report')
+    shop = sub.add_parser('shopping'); shop.add_argument('--format', choices=['text', 'csv'], default='text')
+    sub.add_parser('recipes')
     need = sub.add_parser('needs'); need.add_argument('recipe'); need.add_argument('servings', type=float)
     meal = sub.add_parser('plan'); meal.add_argument('recipe'); meal.add_argument('servings', type=float)
     sub.add_parser('planned'); sub.add_parser('clear-plan'); sub.add_parser('cook-plan')
@@ -140,7 +150,7 @@ def main():
         else:
             ensure_recipes(db)
             if args.command == 'report': report(db)
-            elif args.command == 'shopping': shopping(db)
+            elif args.command == 'shopping': shopping(db, args.format)
             elif args.command == 'recipes': recipes(db)
             elif args.command == 'needs': needs(db, args.recipe, args.servings)
             elif args.command == 'plan': plan(db, args.recipe, args.servings)
